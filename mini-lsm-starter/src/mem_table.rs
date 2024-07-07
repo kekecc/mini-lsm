@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
@@ -27,6 +27,7 @@ pub struct MemTable {
 }
 
 /// Create a bound of `Bytes` from a bound of `&[u8]`.
+/// 制定边界
 pub(crate) fn map_bound(bound: Bound<&[u8]>) -> Bound<Bytes> {
     match bound {
         Bound::Included(x) => Bound::Included(Bytes::copy_from_slice(x)),
@@ -38,12 +39,17 @@ pub(crate) fn map_bound(bound: Bound<&[u8]>) -> Bound<Bytes> {
 impl MemTable {
     /// Create a new mem-table.
     pub fn create(_id: usize) -> Self {
-        unimplemented!()
+        MemTable {
+            map: Arc::new(SkipMap::new()),
+            wal: None,
+            id: _id,
+            approximate_size: Arc::new((256 * 1024 * 1024).into()),
+        }
     }
 
     /// Create a new mem-table with WAL
     pub fn create_with_wal(_id: usize, _path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+        unimplemented!();
     }
 
     /// Create a memtable from WAL
@@ -69,7 +75,13 @@ impl MemTable {
 
     /// Get a value by key.
     pub fn get(&self, _key: &[u8]) -> Option<Bytes> {
-        unimplemented!()
+        let value = self.map.get(_key.into());
+        let value = match value {
+            None => None,
+            Some(entry) => Some(entry.value().clone()),
+        };
+
+        value
     }
 
     /// Put a key-value pair into the mem-table.
@@ -78,7 +90,12 @@ impl MemTable {
     /// In week 2, day 6, also flush the data to WAL.
     /// In week 3, day 5, modify the function to use the batch API.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let entry = self
+            .map
+            .insert(Bytes::copy_from_slice(_key), Bytes::copy_from_slice(_value));
+
+        // todo judge len
+        Ok(())
     }
 
     /// Implement this in week 3, day 5.
