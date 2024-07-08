@@ -2,7 +2,7 @@
 
 use std::ops::Bound;
 use std::path::Path;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Ok, Result};
@@ -43,7 +43,7 @@ impl MemTable {
             map: Arc::new(SkipMap::new()),
             wal: None,
             id: _id,
-            approximate_size: Arc::new((256 * 1024 * 1024).into()),
+            approximate_size: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -82,6 +82,9 @@ impl MemTable {
         };
 
         value
+
+        // 更好的解决方案
+        // self.map.get(_key.into()).map(|e| e.value().clone())
     }
 
     /// Put a key-value pair into the mem-table.
@@ -94,7 +97,8 @@ impl MemTable {
             .map
             .insert(Bytes::copy_from_slice(_key), Bytes::copy_from_slice(_value));
 
-        // todo judge len
+        self.approximate_size
+            .fetch_add(entry.key().len() + entry.value().len(), Ordering::Relaxed);
         Ok(())
     }
 

@@ -1,5 +1,6 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
 
+use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use anyhow::{Ok, Result};
+use arc_swap::Guard;
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
@@ -299,12 +301,56 @@ impl LsmStorageInner {
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        self.state.read().memtable.put(_key, _value)
+        assert!(!_key.is_empty(), "key should not be empty");
+        assert!(!_value.is_empty(), "value should not be empty");
+
+        let approximate_size;
+        {
+            let guard = self.state.read();
+            guard.memtable.put(_key, _value)?;
+
+            approximate_size = guard.memtable.approximate_size();
+        }
+
+        if approximate_size >= self.options.target_sst_size {
+            let state_lock = self.state_lock.lock();
+            let guard = self.state.read();
+
+            // 再次检查，防止出现多次freeze
+            if guard.memtable.approximate_size() >= self.options.target_sst_size {
+                // ! 解除read锁
+                drop(guard);
+                self.force_freeze_memtable(&state_lock)?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        self.state.read().memtable.put(_key, &[])
+        assert!(!_key.is_empty(), "key should not be empty");
+
+        let approximate_size;
+        {
+            let guard = self.state.read();
+            guard.memtable.put(_key, &[])?;
+            approximate_size = guard.memtable.approximate_size();
+        }
+
+        if approximate_size >= self.options.target_sst_size {
+            let state_lock = self.state_lock.lock();
+            let guard = self.state.read();
+
+            // 再次检查，防止出现多次freeze
+            if guard.memtable.approximate_size() >= self.options.target_sst_size {
+                // ! 解除read锁
+                drop(guard);
+                self.force_freeze_memtable(&state_lock)?;
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
@@ -329,7 +375,24 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        unimplemented!()
+        let memtable_id = self.next_sst_id();
+        let memtable = Arc::new(MemTable::create(memtable_id));
+
+        let old_memtable;
+        {
+            let mut guard = self.state.write();
+
+            // 更新memtable
+            let mut snapshot = guard.as_ref().clone();
+            old_memtable = std::mem::replace(&mut snapshot.memtable, memtable);
+
+            // Arc类型的浅拷贝
+            snapshot.imm_memtables.insert(0, old_memtable.clone());
+
+            *guard = Arc::new(snapshot);
+        }
+
+        Ok(())
     }
 
     /// Force flush the earliest-created immutable memtable to disk
