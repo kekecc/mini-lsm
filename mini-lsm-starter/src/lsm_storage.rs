@@ -1,6 +1,5 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
 
-use std::borrow::BorrowMut;
 use std::collections::HashMap;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
@@ -8,7 +7,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use anyhow::{Ok, Result};
-use arc_swap::Guard;
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
