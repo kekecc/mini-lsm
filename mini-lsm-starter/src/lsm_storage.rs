@@ -15,9 +15,10 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::merge_iterator::MergeIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
-use crate::mem_table::MemTable;
+use crate::mem_table::{map_bound, MemTable};
 use crate::mvcc::LsmMvccInner;
 use crate::table::SsTable;
 
@@ -429,6 +430,18 @@ impl LsmStorageInner {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        unimplemented!()
+        // copy
+        let state = { self.state.read().as_ref().clone() };
+
+        let mut iters = Vec::with_capacity(state.imm_memtables.len() + 1);
+        iters.push(Box::new(state.memtable.scan(_lower, _upper)));
+
+        for memtable in state.imm_memtables.iter() {
+            iters.push(Box::new(memtable.scan(_lower, _upper)));
+        }
+
+        let iter = LsmIterator::new(MergeIterator::create(iters))?;
+
+        Ok(FusedIterator::new(iter))
     }
 }
