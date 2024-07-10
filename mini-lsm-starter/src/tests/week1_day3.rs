@@ -29,7 +29,10 @@ fn test_block_build_large_1() {
         KeySlice::for_testing_from_slice_no_ts(b"11"),
         &b"1".repeat(100)
     ));
-    builder.build();
+    let block = builder.build();
+
+    let bytes = block.encode();
+    println!("{:?}", bytes.as_ref());
 }
 
 #[test]

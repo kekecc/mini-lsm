@@ -33,10 +33,15 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        if self.data.len() + self.offsets.len() + key.len() + value.len() + 2 > self.block_size
-            && !self.is_empty()
+        if !self.is_empty()
+            && (self.data.len()
+            + self.offsets.len() * 2 // 2 * len(u16)
+            + key.len()
+            + value.len()
+            + std::mem::size_of::<u16>() * 3)
+                > self.block_size
         {
-            false;
+            return false;
         }
 
         let key_len = key.len() as u16;
@@ -68,5 +73,10 @@ impl BlockBuilder {
             data: self.data,
             offsets: self.offsets,
         }
+    }
+
+    /// For test
+    pub fn size(&self) -> usize {
+        self.data.len() + self.offsets.len() * 2
     }
 }
