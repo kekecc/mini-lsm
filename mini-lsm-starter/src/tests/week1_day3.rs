@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 
 use crate::{
-    block::{Block, BlockBuilder, BlockIterator},
+    block::{self, get_u16_from_data, Block, BlockBuilder, BlockIterator},
     key::{KeySlice, KeyVec},
 };
 
@@ -89,6 +89,16 @@ fn test_block_decode() {
 
 fn as_bytes(x: &[u8]) -> Bytes {
     Bytes::copy_from_slice(x)
+}
+
+#[test]
+fn test_get_u16_from_data() {
+    let data = &[1, 2, 3, 4, 5, 6][..];
+
+    let res = get_u16_from_data(data);
+
+    assert_eq!(data, &[1, 2, 3, 4, 5, 6][..]);
+    assert_eq!(res, 258 as u16);
 }
 
 #[test]

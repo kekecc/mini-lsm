@@ -55,6 +55,10 @@ impl BlockBuilder {
         self.data.put_u16(value_len);
         self.data.extend_from_slice(value);
 
+        if self.first_key.is_empty() {
+            self.first_key = key.to_key_vec();
+        }
+
         true
     }
 
