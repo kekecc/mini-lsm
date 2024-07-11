@@ -119,9 +119,9 @@ impl BlockIterator {
             self.seek_to_index(mid);
 
             if self.key.as_key_slice() > key {
-                right -= 1;
+                right = mid;
             } else if self.key.as_key_slice() < key {
-                left += 1;
+                left = mid + 1;
             } else {
                 return;
             }

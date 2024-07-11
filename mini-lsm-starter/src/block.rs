@@ -33,7 +33,6 @@ impl Block {
 
     /// Decode from the data layout, transform the input `data` to a single `Block`
     pub fn decode(data: &[u8]) -> Self {
-        println!("{}", data.len());
         let chunk_size = 2;
         let offsets_end = data.len() - chunk_size;
         let num_of_elements = (&data[offsets_end..]).get_u16();

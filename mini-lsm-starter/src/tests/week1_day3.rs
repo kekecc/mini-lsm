@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 
 use crate::{
-    block::{self, get_u16_from_data, Block, BlockBuilder, BlockIterator},
+    block::{get_u16_from_data, Block, BlockBuilder, BlockIterator},
     key::{KeySlice, KeyVec},
 };
 
