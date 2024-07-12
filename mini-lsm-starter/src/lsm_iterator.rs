@@ -1,27 +1,51 @@
 use core::panic;
+use std::ops::Bound;
 
 use anyhow::{Ok, Result};
+use bytes::Bytes;
 
 use crate::{
-    iterators::{merge_iterator::MergeIterator, StorageIterator},
+    iterators::{
+        merge_iterator::MergeIterator, two_merge_iterator::TwoMergeIterator, StorageIterator,
+    },
     mem_table::MemTableIterator,
+    table::SsTableIterator,
 };
 
 /// Represents the internal type for an LSM iterator. This type will be changed across the tutorial for multiple times.
-type LsmIteratorInner = MergeIterator<MemTableIterator>;
+type LsmIteratorInner =
+    TwoMergeIterator<MergeIterator<MemTableIterator>, MergeIterator<SsTableIterator>>;
 
 pub struct LsmIterator {
     inner: LsmIteratorInner,
+    // for Sstable iters
+    upper: Bound<Bytes>,
+    // false while key > upper
+    is_valid: bool,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
+    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
         let mut iter = iter;
         while iter.is_valid() && iter.value().is_empty() {
             iter.next()?;
         }
 
-        Ok(Self { inner: iter })
+        let is_valid = if !iter.is_valid() {
+            false
+        } else {
+            match upper.as_ref() {
+                Bound::Included(key) => iter.key().raw_ref() <= key.as_ref(),
+                Bound::Excluded(key) => iter.key().raw_ref() < key.as_ref(),
+                Bound::Unbounded => true,
+            }
+        };
+
+        Ok(Self {
+            inner: iter,
+            upper,
+            is_valid,
+        })
     }
 }
 
@@ -29,7 +53,7 @@ impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        self.inner.is_valid()
+        self.is_valid
     }
 
     fn key(&self) -> &[u8] {
@@ -46,6 +70,16 @@ impl StorageIterator for LsmIterator {
         while self.inner.is_valid() && self.inner.value().is_empty() {
             self.inner.next()?;
         }
+
+        self.is_valid = if !self.inner.is_valid() {
+            false
+        } else {
+            match self.upper.as_ref() {
+                Bound::Included(key) => self.inner.key().raw_ref() <= key.as_ref(),
+                Bound::Excluded(key) => self.inner.key().raw_ref() < key.as_ref(),
+                Bound::Unbounded => true,
+            }
+        };
 
         Ok(())
     }
