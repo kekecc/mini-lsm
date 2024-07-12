@@ -1,16 +1,12 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::{process::id, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Ok, Result};
 
 use super::SsTable;
-use crate::{
-    block::{Block, BlockIterator},
-    iterators::StorageIterator,
-    key::KeySlice,
-};
+use crate::{block::BlockIterator, iterators::StorageIterator, key::KeySlice};
 
 /// An iterator over the contents of an SSTable.
 pub struct SsTableIterator {

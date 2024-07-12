@@ -6,7 +6,6 @@ use std::collections::binary_heap::PeekMut;
 use std::collections::BinaryHeap;
 
 use anyhow::Result;
-use nom::Err;
 
 use crate::key::KeySlice;
 
