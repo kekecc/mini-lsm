@@ -69,6 +69,49 @@ impl LsmStorageState {
     }
 }
 
+/// range_overlap checks if the keys of two ranges overlap
+fn range_overlap(
+    range_lower: KeySlice,
+    range_upper: KeySlice,
+    user_lower: Bound<&[u8]>,
+    user_upper: Bound<&[u8]>,
+) -> bool {
+    match user_lower {
+        Bound::Included(lower) => {
+            if lower > range_upper.raw_ref() {
+                return false;
+            }
+        }
+        Bound::Excluded(lower) => {
+            if lower >= range_upper.raw_ref() {
+                return false;
+            }
+        }
+        Bound::Unbounded => {}
+    }
+
+    match user_upper {
+        Bound::Excluded(upper) => {
+            if upper <= range_lower.raw_ref() {
+                return false;
+            }
+        }
+        Bound::Included(upper) => {
+            if upper < range_lower.raw_ref() {
+                return false;
+            }
+        }
+        Bound::Unbounded => {}
+    }
+
+    true
+}
+
+/// key_within checks if the key is in the range
+fn key_within(key: &[u8], range_lower: KeySlice, range_upper: KeySlice) -> bool {
+    return key >= range_lower.raw_ref() && key <= range_upper.raw_ref();
+}
+
 #[derive(Debug, Clone)]
 pub struct LsmStorageOptions {
     // Block size in bytes
@@ -158,7 +201,33 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        // ! sync?
+        self.compaction_notifier.send(()).ok();
+        self.flush_notifier.send(()).ok();
+
+        {
+            let mut compact_thread = self.compaction_thread.lock();
+            if let Some(handle) = compact_thread.take() {
+                handle.join().map_err(|e| anyhow::anyhow!("{:?}", e))?;
+            }
+        }
+
+        {
+            let mut flush_thread = self.flush_thread.lock();
+            if let Some(handle) = flush_thread.take() {
+                handle.join().map_err(|e| anyhow::anyhow!("{:?}", e))?;
+            }
+        }
+
+        // 可能还有没flush的
+        while {
+            let guard = self.inner.state.read();
+            !guard.imm_memtables.is_empty()
+        } {
+            self.force_flush()?;
+        }
+
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -320,6 +389,13 @@ impl LsmStorageInner {
         let mut iters = Vec::with_capacity(snapshot.l0_sstables.len());
         for sstable_idx in snapshot.l0_sstables.iter() {
             let table = snapshot.sstables[sstable_idx].clone();
+            if !key_within(
+                _key,
+                table.first_key().as_key_slice(),
+                table.last_key().as_key_slice(),
+            ) {
+                continue;
+            }
             let iter = SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(_key))?;
 
             iters.push(Box::new(iter));
@@ -465,7 +541,7 @@ impl LsmStorageInner {
             let mut guard = self.state.write();
             let mut snapshot = guard.as_ref().clone();
 
-            let mem = snapshot.imm_memtables.pop().unwrap();
+            let _mem = snapshot.imm_memtables.pop().unwrap();
 
             snapshot.l0_sstables.insert(0, sstable_id);
 
@@ -506,6 +582,14 @@ impl LsmStorageInner {
         let mut sstable_iters = Vec::with_capacity(snapshot.l0_sstables.len());
         for ss_idx in snapshot.l0_sstables.iter() {
             let table = snapshot.sstables[ss_idx].clone();
+            if !range_overlap(
+                table.first_key().as_key_slice(),
+                table.last_key().as_key_slice(),
+                _lower,
+                _upper,
+            ) {
+                continue;
+            }
             let iter = match _lower {
                 Bound::Included(key) => {
                     SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key))?
