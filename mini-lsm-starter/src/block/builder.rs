@@ -1,6 +1,8 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
+use std::cmp::min;
+
 use bytes::BufMut;
 
 use crate::key::{KeySlice, KeyVec};
@@ -17,6 +19,21 @@ pub struct BlockBuilder {
     block_size: usize,
     /// The first key in the block
     first_key: KeyVec,
+}
+
+fn cmp_key_overlap(first: &KeyVec, second: &KeySlice) -> usize {
+    let first = first.raw_ref();
+    let second = second.raw_ref();
+
+    let min_len = min(first.len(), second.len());
+
+    for i in 0..min_len {
+        if first[i] != second[i] {
+            return i + 1;
+        }
+    }
+
+    min_len
 }
 
 impl BlockBuilder {
@@ -44,14 +61,17 @@ impl BlockBuilder {
             return false;
         }
 
-        let key_len = key.len() as u16;
+        let overlap_key_len = cmp_key_overlap(&self.first_key, &key);
+        let rest_key_len = key.len() as u16 - overlap_key_len as u16;
         let value_len = value.len() as u16;
 
         // key-value 的索引
         self.offsets.push(self.data.len() as u16);
 
-        self.data.put_u16(key_len);
-        self.data.extend_from_slice(key.raw_ref());
+        self.data.put_u16(overlap_key_len as u16);
+        self.data.put_u16(rest_key_len);
+        self.data
+            .extend_from_slice(&key.raw_ref()[overlap_key_len..]);
         self.data.put_u16(value_len);
         self.data.extend_from_slice(value);
 
@@ -76,6 +96,7 @@ impl BlockBuilder {
         Block {
             data: self.data,
             offsets: self.offsets,
+            first_key: self.first_key,
         }
     }
 

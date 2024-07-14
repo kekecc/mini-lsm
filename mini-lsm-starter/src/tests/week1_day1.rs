@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bytes::Buf;
 use tempfile::tempdir;
 
 use crate::{

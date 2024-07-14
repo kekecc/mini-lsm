@@ -9,10 +9,13 @@ use bytes::{Buf, BufMut, Bytes};
 pub use iterator::get_u16_from_data;
 pub use iterator::BlockIterator;
 
+use crate::key::KeyVec;
+
 /// A block is the smallest unit of read and caching in LSM tree. It is a collection of sorted key-value pairs.
 pub struct Block {
     pub(crate) data: Vec<u8>,
     pub(crate) offsets: Vec<u16>,
+    pub(crate) first_key: KeyVec,
 }
 
 impl Block {
@@ -43,11 +46,16 @@ impl Block {
             .map(|mut offset_chunk| offset_chunk.get_u16())
             .collect();
 
+        let mut buf = &data[0..offsets_start];
+        buf.get_u16();
+        let first_key_len = buf.get_u16();
+        let first_key = &data[chunk_size * 2..chunk_size * 2 + first_key_len as usize];
         let data = (&data[0..offsets_start]).to_vec();
 
         Self {
             data: data,
             offsets: offsets,
+            first_key: KeyVec::from_vec(first_key.into()),
         }
     }
 }
