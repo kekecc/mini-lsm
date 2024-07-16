@@ -29,7 +29,8 @@ fn cmp_key_overlap(first: &KeyVec, second: &KeySlice) -> usize {
 
     for i in 0..min_len {
         if first[i] != second[i] {
-            return i + 1;
+            // ! 返回 i，不是 i + 1！！！
+            return i;
         }
     }
 

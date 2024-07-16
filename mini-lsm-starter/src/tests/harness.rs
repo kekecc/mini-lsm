@@ -438,5 +438,6 @@ pub fn construct_merge_iterator_over_storage(
             ));
         }
     }
+
     MergeIterator::create(iters)
 }

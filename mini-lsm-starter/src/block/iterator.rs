@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, sync::Arc, usize};
+use std::{sync::Arc, usize};
 
 use bytes::Buf;
 
@@ -87,16 +87,15 @@ impl BlockIterator {
         // 获取key
         let overlap_key_len = pair.get_u16();
         let rest_key_len = pair.get_u16();
-        let key_range = (SIZEOF_U16 * 2, SIZEOF_U16 * 2 + rest_key_len as usize);
         let mut key = (&self.first_key.raw_ref()[0..overlap_key_len as usize]).to_vec();
-        key.extend(pair[key_range.0..key_range.1].to_vec().iter());
+        key.extend((&pair[0..rest_key_len as usize]).to_vec().iter());
         self.key = KeyVec::from_vec(key);
 
-        let pair = &pair[key_range.1..];
+        let pair = &pair[rest_key_len as usize..];
 
         // 获取value
         let value_len = get_u16_from_data(pair);
-        let value_begin = index_offset + key_range.1 + SIZEOF_U16;
+        let value_begin = index_offset + SIZEOF_U16 * 3 + rest_key_len as usize;
         let value_end = index_next_offset;
         self.value_range = (value_begin, value_end);
     }
