@@ -1,4 +1,4 @@
-use std::{collections::HashSet, vec};
+use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
@@ -55,20 +55,19 @@ impl SimpleLeveledCompactionController {
                     });
                 }
             } else {
-                if _snapshot.levels[current - 1].1.len() == 0 {
-                    break;
-                }
-                let size_ratio_percent = _snapshot.levels[lower - 1].1.len() as f64
-                    / _snapshot.levels[current - 1].1.len() as f64;
+                if _snapshot.levels[current - 1].1.len() != 0 {
+                    let size_ratio_percent = _snapshot.levels[lower - 1].1.len() as f64
+                        / _snapshot.levels[current - 1].1.len() as f64;
 
-                if size_ratio_percent < self.options.size_ratio_percent as f64 / 100.0 {
-                    return Some(SimpleLeveledCompactionTask {
-                        upper_level: Some(current),
-                        upper_level_sst_ids: _snapshot.levels[current - 1].1.clone(),
-                        lower_level: lower,
-                        lower_level_sst_ids: _snapshot.levels[lower - 1].1.clone(),
-                        is_lower_level_bottom_level: lower == self.options.max_levels,
-                    });
+                    if size_ratio_percent < self.options.size_ratio_percent as f64 / 100.0 {
+                        return Some(SimpleLeveledCompactionTask {
+                            upper_level: Some(current),
+                            upper_level_sst_ids: _snapshot.levels[current - 1].1.clone(),
+                            lower_level: lower,
+                            lower_level_sst_ids: _snapshot.levels[lower - 1].1.clone(),
+                            is_lower_level_bottom_level: lower == self.options.max_levels,
+                        });
+                    }
                 }
             }
 
