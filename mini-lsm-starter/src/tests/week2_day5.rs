@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread::sleep, time::Duration};
 
 use bytes::BufMut;
 use tempfile::tempdir;
@@ -123,10 +123,13 @@ fn test_integration(compaction_options: CompactionOptions) {
             .force_freeze_memtable(&storage.inner.state_lock.lock())
             .unwrap();
     }
+    std::thread::sleep(Duration::from_secs(1)); // wait until all memtables flush
+
     storage.close().unwrap();
     // ensure all SSTs are flushed
     assert!(storage.inner.state.read().memtable.is_empty());
     assert!(storage.inner.state.read().imm_memtables.is_empty());
+
     storage.dump_structure();
     drop(storage);
     dump_files_in_dir(&dir);

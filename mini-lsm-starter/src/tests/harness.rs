@@ -275,7 +275,6 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
     );
 
     storage.dump_structure();
-    std::thread::sleep(Duration::from_secs(10)); // wait until all memtables flush
 
     println!("This test case does not guarantee your compaction algorithm produces a LSM state as expected. It only does minimal checks on the size of the levels. Please use the compaction simulator to check if the compaction is correctly going on.");
 }

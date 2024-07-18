@@ -23,6 +23,7 @@ use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
 
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -307,7 +308,7 @@ impl LsmStorageInner {
         let output: Vec<usize> = sstables.iter().map(|table| table.sst_id()).collect();
         let files_to_rm =
             {
-                let _ = self.state_lock.lock();
+                let state_lock = self.state_lock.lock();
 
                 let (mut snapshot, files_to_rm) = self
                     .compaction_controller
@@ -318,10 +319,16 @@ impl LsmStorageInner {
                 }
 
                 for sstable in sstables {
-                    snapshot.sstables.insert(sstable.sst_id(), sstable);
+                    let res = snapshot.sstables.insert(sstable.sst_id(), sstable);
+                    assert!(res.is_none());
                 }
 
                 *self.state.write() = Arc::new(snapshot);
+
+                self.sync_dir()?;
+                if let Some(manifest) = &self.manifest {
+                    manifest.add_record(&state_lock, ManifestRecord::Compaction(task, output))?;
+                }
 
                 files_to_rm
             };
@@ -330,6 +337,7 @@ impl LsmStorageInner {
             std::fs::remove_file(self.path_of_sst(file))?;
         }
 
+        self.sync_dir()?;
         Ok(())
     }
 
