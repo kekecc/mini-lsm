@@ -1,3 +1,5 @@
+use std::{collections::HashSet, vec};
+
 use serde::{Deserialize, Serialize};
 
 use crate::lsm_storage::LsmStorageState;
@@ -35,7 +37,46 @@ impl SimpleLeveledCompactionController {
         &self,
         _snapshot: &LsmStorageState,
     ) -> Option<SimpleLeveledCompactionTask> {
-        unimplemented!()
+        let mut current = 0;
+        let mut lower = 1;
+
+        while lower <= self.options.max_levels {
+            if current == 0 {
+                let trigger =
+                    _snapshot.l0_sstables.len() >= self.options.level0_file_num_compaction_trigger;
+
+                if trigger {
+                    return Some(SimpleLeveledCompactionTask {
+                        upper_level: None,
+                        upper_level_sst_ids: _snapshot.l0_sstables.clone(),
+                        lower_level: lower,
+                        lower_level_sst_ids: _snapshot.levels[lower - 1].1.clone(),
+                        is_lower_level_bottom_level: self.options.max_levels == 1,
+                    });
+                }
+            } else {
+                if _snapshot.levels[current - 1].1.len() == 0 {
+                    break;
+                }
+                let size_ratio_percent = _snapshot.levels[lower - 1].1.len() as f64
+                    / _snapshot.levels[current - 1].1.len() as f64;
+
+                if size_ratio_percent < self.options.size_ratio_percent as f64 / 100.0 {
+                    return Some(SimpleLeveledCompactionTask {
+                        upper_level: Some(current),
+                        upper_level_sst_ids: _snapshot.levels[current - 1].1.clone(),
+                        lower_level: lower,
+                        lower_level_sst_ids: _snapshot.levels[lower - 1].1.clone(),
+                        is_lower_level_bottom_level: lower == self.options.max_levels,
+                    });
+                }
+            }
+
+            current = lower;
+            lower += 1;
+        }
+
+        None
     }
 
     /// Apply the compaction result.
@@ -51,6 +92,46 @@ impl SimpleLeveledCompactionController {
         _task: &SimpleLeveledCompactionTask,
         _output: &[usize],
     ) -> (LsmStorageState, Vec<usize>) {
-        unimplemented!()
+        let mut snapshot = _snapshot.clone();
+        let mut files_to_rm = Vec::new();
+        if let Some(upper_level) = _task.upper_level {
+            assert_eq!(
+                _task.upper_level_sst_ids,
+                snapshot.levels[upper_level - 1].1
+            );
+
+            for idx in _task.upper_level_sst_ids.iter() {
+                files_to_rm.push(*idx);
+            }
+            snapshot.levels[upper_level - 1].1.clear();
+        } else {
+            for idx in &_task.upper_level_sst_ids {
+                files_to_rm.push(*idx);
+            }
+
+            let mut set: HashSet<usize> =
+                HashSet::from_iter(_task.upper_level_sst_ids.clone().into_iter());
+            let new_l0_sstables: Vec<usize> = snapshot
+                .l0_sstables
+                .iter()
+                .filter(|x| !set.remove(x))
+                .copied()
+                .collect();
+
+            snapshot.l0_sstables = new_l0_sstables;
+        }
+
+        assert_eq!(
+            _task.lower_level_sst_ids,
+            snapshot.levels[_task.lower_level - 1].1
+        );
+
+        for idx in _task.lower_level_sst_ids.iter() {
+            files_to_rm.push(*idx);
+        }
+
+        snapshot.levels[_task.lower_level - 1].1 = _output.to_vec();
+
+        (snapshot, files_to_rm)
     }
 }

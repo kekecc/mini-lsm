@@ -237,6 +237,7 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
     }
 
     std::thread::sleep(Duration::from_secs(1)); // wait until all memtables flush
+
     while {
         let snapshot = storage.inner.state.read();
         !snapshot.imm_memtables.is_empty()
@@ -260,6 +261,11 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
     for i in 0..(max_key + 40000) {
         let key = gen_key(i);
         let value = storage.get(key.as_bytes()).unwrap();
+        // println!(
+        //     "{:?} {:?}",
+        //     as_bytes(key.as_bytes()),
+        //     value.clone().unwrap()
+        // );
         if let Some(val) = key_map.get(&i) {
             let expected_value = gen_value(*val);
             assert_eq!(value, Some(Bytes::from(expected_value.clone())));
@@ -438,6 +444,5 @@ pub fn construct_merge_iterator_over_storage(
             ));
         }
     }
-
     MergeIterator::create(iters)
 }

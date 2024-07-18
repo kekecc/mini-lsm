@@ -59,6 +59,7 @@ impl BlockBuilder {
             + std::mem::size_of::<u16>() * 3)
                 > self.block_size
         {
+            
             return false;
         }
 
