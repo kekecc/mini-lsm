@@ -1,6 +1,6 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
@@ -338,7 +338,7 @@ impl LsmStorageInner {
         let mut state = LsmStorageState::create(&options);
         let block_cache = Arc::new(BlockCache::new(1 << 20));
         let manifest;
-        let mut memtables = HashSet::new();
+        let mut memtables = BTreeSet::new();
         let mut next_sst_id = 1;
 
         if !path.exists() {
@@ -387,7 +387,7 @@ impl LsmStorageInner {
                 }
             }
 
-            println!("----- recover sstables -----");
+            // println!("----- recover sstables -----");
             // 恢复sstable
             for sst_id in state
                 .l0_sstables
@@ -399,17 +399,17 @@ impl LsmStorageInner {
                     Some(block_cache.clone()),
                     FileObject::open(&Self::path_of_sst_static(path, *sst_id))?,
                 )?;
-                println!("id: {:?}", sst_id);
+                // println!("id: {:?}", sst_id);
                 state.sstables.insert(*sst_id, Arc::new(sstable));
             }
-            println!("----- end -----");
+            // println!("----- end -----");
             next_sst_id += 1;
 
             // 恢复memtable
             if options.enable_wal {
-                println!("----- recover memtables -----");
+                // println!("----- recover memtables -----");
                 for mem_id in memtables.iter() {
-                    println!("id: {:?}", mem_id);
+                    // println!("id: {:?}", mem_id);
                     let memtable = MemTable::recover_from_wal(
                         *mem_id,
                         Self::path_of_wal_static(path, *mem_id),
@@ -423,7 +423,7 @@ impl LsmStorageInner {
                     next_sst_id,
                     Self::path_of_wal_static(path, next_sst_id),
                 )?);
-                println!("----- end ------");
+                // println!("----- end ------");
             } else {
                 state.memtable = Arc::new(MemTable::create(next_sst_id));
             }
