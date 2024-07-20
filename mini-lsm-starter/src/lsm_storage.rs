@@ -20,7 +20,7 @@ use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
-use crate::key::KeySlice;
+use crate::key::{self, KeySlice};
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::{self, Manifest, ManifestRecord};
 use crate::mem_table::{map_bound, MemTable};
@@ -558,50 +558,53 @@ impl LsmStorageInner {
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
-    pub fn write_batch<T: AsRef<[u8]>>(&self, _batch: &[WriteBatchRecord<T>]) -> Result<()> {
-        unimplemented!()
-    }
+    pub fn write_batch<T: AsRef<[u8]>>(&self, batch: &[WriteBatchRecord<T>]) -> Result<()> {
+        for record in batch.iter() {
+            match record {
+                WriteBatchRecord::Put(key, value) => {
+                    let key = key.as_ref();
+                    let value = value.as_ref();
+                    assert!(!key.is_empty(), "key should not be empty!");
+                    assert!(!value.is_empty(), "value should not be empty");
 
-    /// Put a key-value pair into the storage by writing into the current memtable.
-    pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        assert!(!_key.is_empty(), "key should not be empty");
-        assert!(!_value.is_empty(), "value should not be empty");
+                    let approximate_size = {
+                        let guard = self.state.read();
+                        guard.memtable.put(key, value)?;
+                        guard.memtable.approximate_size()
+                    };
 
-        let approximate_size;
-        {
-            let guard = self.state.read();
+                    self.try_to_freeze_memtable(approximate_size)?;
+                }
+                WriteBatchRecord::Del(key) => {
+                    let key = key.as_ref();
+                    let value: &[u8] = &[];
+                    assert!(!key.is_empty(), "key should not be empty!");
 
-            guard.memtable.put(_key, _value)?;
+                    let approximate_size = {
+                        let guard = self.state.read();
+                        guard.memtable.put(key, value)?;
+                        guard.memtable.approximate_size()
+                    };
 
-            approximate_size = guard.memtable.approximate_size();
-        }
-
-        if approximate_size >= self.options.target_sst_size {
-            let state_lock = self.state_lock.lock();
-            let guard = self.state.read();
-
-            // 再次检查，防止出现多次freeze
-            if guard.memtable.approximate_size() >= self.options.target_sst_size {
-                // ! 解除read锁
-                drop(guard);
-                self.force_freeze_memtable(&state_lock)?;
+                    self.try_to_freeze_memtable(approximate_size)?;
+                }
             }
         }
 
         Ok(())
     }
 
+    /// Put a key-value pair into the storage by writing into the current memtable.
+    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.write_batch(&[WriteBatchRecord::Put(key, value)])
+    }
+
     /// Remove a key from the storage by writing an empty value.
-    pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        assert!(!_key.is_empty(), "key should not be empty");
+    pub fn delete(&self, key: &[u8]) -> Result<()> {
+        self.write_batch(&[WriteBatchRecord::Del(key)])
+    }
 
-        let approximate_size;
-        {
-            let guard = self.state.read();
-            guard.memtable.put(_key, &[])?;
-            approximate_size = guard.memtable.approximate_size();
-        }
-
+    fn try_to_freeze_memtable(&self, approximate_size: usize) -> Result<()> {
         if approximate_size >= self.options.target_sst_size {
             let state_lock = self.state_lock.lock();
             let guard = self.state.read();
