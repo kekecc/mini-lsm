@@ -74,7 +74,11 @@ impl SsTableBuilder {
             first_key: KeyBytes::from_bytes(first_key.into()),
             last_key: KeyBytes::from_bytes(last_key.into()),
         });
-        self.data.put(block_data.encode());
+
+        let block_data = block_data.encode();
+        let crc32 = crc32fast::hash(&block_data);
+        self.data.put(block_data);
+        self.data.put_u32(crc32);
     }
 
     /// Get the estimated size of the SSTable.

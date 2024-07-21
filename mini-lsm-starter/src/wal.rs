@@ -1,6 +1,7 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
 
 use std::fs::{File, OpenOptions};
+use std::hash::Hasher;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -40,13 +41,24 @@ impl Wal {
 
         let mut data = &buf[..];
         while data.has_remaining() {
-            let key_len = data.get_u16() as usize;
-            let key = Bytes::copy_from_slice(&data[..key_len]);
-            data.advance(key_len);
+            let mut hasher = crc32fast::Hasher::new();
 
-            let value_len = data.get_u16() as usize;
-            let value = Bytes::copy_from_slice(&data[..value_len]);
-            data.advance(value_len);
+            let key_len = data.get_u16();
+            hasher.write_u16(key_len);
+            let key = Bytes::copy_from_slice(&data[..key_len as usize]);
+            hasher.write(&key);
+            data.advance(key_len as usize);
+
+            let value_len = data.get_u16();
+            hasher.write_u16(value_len);
+            let value = Bytes::copy_from_slice(&data[..value_len as usize]);
+            hasher.write(&value);
+            data.advance(value_len as usize);
+
+            let check_sum = data.get_u32();
+            if check_sum != hasher.finalize() {
+                panic!("check crc32 error!");
+            }
 
             skiplist.insert(key, value);
         }
@@ -59,13 +71,23 @@ impl Wal {
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut file = self.file.lock();
 
-        let mut buf: Vec<u8> =
-            Vec::with_capacity(key.len() + value.len() + 2 * std::mem::size_of::<u16>());
+        let mut buf: Vec<u8> = Vec::with_capacity(
+            key.len() + value.len() + 2 * std::mem::size_of::<u16>() + std::mem::size_of::<u32>(),
+        );
+
+        let mut hasher = crc32fast::Hasher::new();
 
         buf.put_u16(key.len() as u16);
+        hasher.write_u16(key.len() as u16);
         buf.put_slice(key);
+        hasher.write(key);
         buf.put_u16(value.len() as u16);
+        hasher.write_u16(value.len() as u16);
         buf.put_slice(value);
+        hasher.write(value);
+
+        let check_sum = hasher.finalize();
+        buf.put_u32(check_sum);
 
         file.write_all(&buf)?;
 

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::{fs::File, io::Write};
 
 use anyhow::{Ok, Result};
+use bytes::{Buf, BufMut};
 use parking_lot::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
@@ -48,10 +49,20 @@ impl Manifest {
         file.read_to_end(&mut data)?;
 
         let mut records: Vec<ManifestRecord> = Vec::new();
-        let mut iter = Deserializer::from_slice(&data).into_iter();
+        let mut buf = data.as_slice();
 
-        while let Some(record) = iter.next() {
-            records.push(record?);
+        while buf.has_remaining() {
+            let record_len = buf.get_u64();
+            let record_data = &buf[..record_len as usize];
+            let record = serde_json::from_slice::<ManifestRecord>(record_data)?;
+            buf.advance(record_len as usize);
+
+            let check_sum = buf.get_u32();
+            if crc32fast::hash(record_data) != check_sum {
+                panic!("check crc32 error!");
+            }
+
+            records.push(record);
         }
 
         Ok((
@@ -72,7 +83,11 @@ impl Manifest {
 
     pub fn add_record_when_init(&self, record: ManifestRecord) -> Result<()> {
         let mut file = self.file.lock();
-        let record = serde_json::to_vec(&record)?;
+        let mut record = serde_json::to_vec(&record)?;
+        let crc32 = crc32fast::hash(&record);
+
+        file.write_all(&(record.len() as u64).to_be_bytes())?;
+        record.put_u32(crc32);
         file.write_all(&record)?;
         file.sync_all()?;
         Ok(())

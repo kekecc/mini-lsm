@@ -46,6 +46,9 @@ impl BlockMeta {
         #[allow(clippy::ptr_arg)] // remove this allow after you finish
         buf: &mut Vec<u8>,
     ) {
+        let begin = buf.len();
+        buf.put_u32(block_meta.len() as u32);
+
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
 
@@ -57,12 +60,15 @@ impl BlockMeta {
             buf.put_u16(last_key_len as u16);
             buf.put(meta.last_key.raw_ref());
         }
+        buf.put_u32(crc32fast::hash(&buf[begin + 4..]));
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(mut buf: impl Buf) -> Vec<BlockMeta> {
+    pub fn decode_block_meta(mut buf: &[u8]) -> Vec<BlockMeta> {
         let mut meta_blocks = Vec::new();
-        loop {
+        let meta_num = buf.get_u32() as usize;
+        let crc32 = crc32fast::hash(&buf[..(buf.remaining() - 4)]);
+        for _ in 0..meta_num {
             let mut meta = BlockMeta::new_without_params();
 
             let offset = buf.get_u32();
@@ -77,10 +83,11 @@ impl BlockMeta {
             meta.last_key = KeyBytes::from_bytes(last_key);
 
             meta_blocks.push(meta);
+        }
 
-            if !buf.has_remaining() {
-                break;
-            }
+        let check_sum = buf.get_u32();
+        if crc32 != check_sum {
+            panic!("crc32 check error!");
         }
 
         meta_blocks
@@ -208,11 +215,17 @@ impl SsTable {
             (&self.block_meta[block_idx + 1]).offset
         };
 
+        let block_len = end_offset - begin_offset - 4;
         let block_data = self
             .file
             .read(begin_offset as u64, (end_offset - begin_offset) as u64)?;
+        let check_sum = (&block_data[block_len..]).get_u32();
+        let crc32 = crc32fast::hash(&block_data[..block_len]);
+        if check_sum != crc32 {
+            panic!("crc32 check error!");
+        }
 
-        Ok(Arc::new(Block::decode(&block_data[..])))
+        Ok(Arc::new(Block::decode(&block_data[..block_len])))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
