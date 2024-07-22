@@ -53,8 +53,8 @@ impl Bloom {
             panic!("check crc32 error!");
         }
 
-        let filter = &buf[..buf.len() - 1];
-        let k = buf[buf.len() - 1];
+        let filter = &buf[..buf.len() - 5];
+        let k = buf[buf.len() - 5];
         Ok(Self {
             filter: filter.to_vec().into(),
             k,
