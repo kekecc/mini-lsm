@@ -69,12 +69,12 @@ impl SstConcatIterator {
         while left < right {
             let mid = (right - left) / 2 + left;
 
-            if sstables[mid].first_key().raw_ref() == key.raw_ref() {
+            if sstables[mid].first_key().key_ref() == key.key_ref() {
                 idx = mid;
                 break;
-            } else if sstables[mid].first_key().raw_ref() < key.raw_ref() {
+            } else if sstables[mid].first_key().key_ref() < key.key_ref() {
                 left += 1;
-            } else if sstables[mid].first_key().raw_ref() > key.raw_ref() {
+            } else if sstables[mid].first_key().key_ref() > key.key_ref() {
                 right = mid;
             }
 

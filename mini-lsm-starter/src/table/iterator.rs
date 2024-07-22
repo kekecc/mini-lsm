@@ -49,7 +49,7 @@ impl SsTableIterator {
         }
 
         Ok(Self {
-            table: table,
+            table,
             blk_iter: iter,
             blk_idx: idx,
         })

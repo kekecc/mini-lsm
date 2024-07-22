@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 pub use builder::SsTableBuilder;
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
@@ -34,8 +34,8 @@ impl BlockMeta {
     fn new_without_params() -> Self {
         Self {
             offset: 0,
-            first_key: KeyBytes::from_bytes(Bytes::new()),
-            last_key: KeyBytes::from_bytes(Bytes::new()),
+            first_key: KeyBytes::new(),
+            last_key: KeyBytes::new(),
         }
     }
     /// Encode block meta to a buffer.
@@ -52,13 +52,15 @@ impl BlockMeta {
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
 
-            let first_key_len = meta.first_key.len();
+            let first_key_len = meta.first_key.key_len();
             buf.put_u16(first_key_len as u16);
-            buf.put(meta.first_key.raw_ref());
+            buf.put(meta.first_key.key_ref());
+            buf.put_u64(meta.first_key.ts());
 
-            let last_key_len = meta.last_key.len();
+            let last_key_len = meta.last_key.key_len();
             buf.put_u16(last_key_len as u16);
-            buf.put(meta.last_key.raw_ref());
+            buf.put(meta.last_key.key_ref());
+            buf.put_u64(meta.last_key.ts());
         }
         buf.put_u32(crc32fast::hash(&buf[begin + 4..]));
     }
@@ -76,11 +78,13 @@ impl BlockMeta {
 
             let first_key_len = buf.get_u16() as usize;
             let first_key = buf.copy_to_bytes(first_key_len);
-            meta.first_key = KeyBytes::from_bytes(first_key);
+            let ts = buf.get_u64();
+            meta.first_key = KeyBytes::from_bytes_with_ts(first_key, ts);
 
             let last_key_len = buf.get_u16() as usize;
             let last_key = buf.copy_to_bytes(last_key_len);
-            meta.last_key = KeyBytes::from_bytes(last_key);
+            let ts = buf.get_u64();
+            meta.last_key = KeyBytes::from_bytes_with_ts(last_key, ts);
 
             meta_blocks.push(meta);
         }

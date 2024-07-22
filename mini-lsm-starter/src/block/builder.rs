@@ -22,8 +22,8 @@ pub struct BlockBuilder {
 }
 
 fn cmp_key_overlap(first: &KeyVec, second: &KeySlice) -> usize {
-    let first = first.raw_ref();
-    let second = second.raw_ref();
+    let first = first.key_ref();
+    let second = second.key_ref();
 
     let min_len = min(first.len(), second.len());
 
@@ -53,18 +53,17 @@ impl BlockBuilder {
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
         if !self.is_empty()
             && (self.data.len()
-            + self.offsets.len() * 2 // 2 * len(u16)
-            + key.len()
-            + value.len()
-            + std::mem::size_of::<u16>() * 3)
+                + self.offsets.len() * 2
+                + key.raw_len()
+                + value.len()
+                + std::mem::size_of::<u16>() * 3)
                 > self.block_size
         {
-            
             return false;
         }
 
         let overlap_key_len = cmp_key_overlap(&self.first_key, &key);
-        let rest_key_len = key.len() as u16 - overlap_key_len as u16;
+        let rest_key_len = key.key_len() as u16 - overlap_key_len as u16;
         let value_len = value.len() as u16;
 
         // key-value 的索引
@@ -73,7 +72,9 @@ impl BlockBuilder {
         self.data.put_u16(overlap_key_len as u16);
         self.data.put_u16(rest_key_len);
         self.data
-            .extend_from_slice(&key.raw_ref()[overlap_key_len..]);
+            .extend_from_slice(&key.key_ref()[overlap_key_len..]);
+        // for mvcc, insert ts
+        self.data.put_u64(key.ts());
         self.data.put_u16(value_len);
         self.data.extend_from_slice(value);
 

@@ -47,15 +47,16 @@ impl Block {
             .collect();
 
         let mut buf = &data[0..offsets_start];
-        buf.get_u16();
+        buf.get_u16(); // overlap len = 0
         let first_key_len = buf.get_u16();
         let first_key = &data[chunk_size * 2..chunk_size * 2 + first_key_len as usize];
+        let ts = (&data[chunk_size * 2 + first_key_len as usize..]).get_u64();
         let data = (&data[0..offsets_start]).to_vec();
 
         Self {
-            data: data,
-            offsets: offsets,
-            first_key: KeyVec::from_vec(first_key.into()),
+            data,
+            offsets,
+            first_key: KeyVec::from_vec_with_ts(first_key.into(), ts),
         }
     }
 }

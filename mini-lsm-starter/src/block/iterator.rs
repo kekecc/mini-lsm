@@ -7,6 +7,7 @@ use crate::key::{KeySlice, KeyVec};
 use super::Block;
 
 const SIZEOF_U16: usize = std::mem::size_of::<u16>();
+const SIZEOF_U64: usize = std::mem::size_of::<u64>();
 
 /// Iterates on a block.
 pub struct BlockIterator {
@@ -50,7 +51,7 @@ impl BlockIterator {
 
     /// Returns the key of the current entry.
     pub fn key(&self) -> KeySlice {
-        KeySlice::from_slice(self.key.raw_ref())
+        KeySlice::from_slice(self.key.key_ref(), self.key.ts())
     }
 
     /// Returns the value of the current entry.
@@ -87,15 +88,15 @@ impl BlockIterator {
         // 获取key
         let overlap_key_len = pair.get_u16();
         let rest_key_len = pair.get_u16();
-        let mut key = (&self.first_key.raw_ref()[0..overlap_key_len as usize]).to_vec();
+        let mut key = (&self.first_key.key_ref()[0..overlap_key_len as usize]).to_vec();
         key.extend((&pair[0..rest_key_len as usize]).to_vec().iter());
-        self.key = KeyVec::from_vec(key);
-
-        let pair = &pair[rest_key_len as usize..];
+        pair.advance(rest_key_len as usize);
+        let ts = pair.get_u64();
+        self.key = KeyVec::from_vec_with_ts(key, ts);
 
         // 获取value
         let value_len = get_u16_from_data(pair);
-        let value_begin = index_offset + SIZEOF_U16 * 3 + rest_key_len as usize;
+        let value_begin = index_offset + SIZEOF_U16 * 3 + SIZEOF_U64 + rest_key_len as usize;
         let value_end = index_next_offset;
         self.value_range = (value_begin, value_end);
     }
