@@ -566,7 +566,7 @@ impl LsmStorageInner {
         Ok(None)
     }
 
-    fn mvcc(&self) -> &LsmMvccInner {
+    pub fn mvcc(&self) -> &LsmMvccInner {
         self.mvcc.as_ref().unwrap()
     }
 

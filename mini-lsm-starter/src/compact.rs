@@ -12,6 +12,7 @@ use anyhow::{Ok, Result};
 
 pub use leveled::{LeveledCompactionController, LeveledCompactionOptions, LeveledCompactionTask};
 use serde::{Deserialize, Serialize};
+use serde_json::de::Read;
 pub use simple_leveled::{
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, SimpleLeveledCompactionTask,
 };
@@ -22,6 +23,7 @@ use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
 
+use crate::key::TS_MAX;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
 use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
@@ -193,15 +195,48 @@ impl LsmStorageInner {
     fn compact_inner(
         &self,
         mut merge_iter: impl for<'a> StorageIterator<KeyType<'a> = crate::key::Key<&'a [u8]>>,
-        _compact_to_bottom_level: bool,
+        compact_to_bottom_level: bool,
     ) -> Result<Vec<Arc<SsTable>>> {
         // 按照大小获取SsTables
         let mut builder = SsTableBuilder::new(self.options.block_size);
         let mut sstables = Vec::new();
         let mut last_key: Vec<u8> = Vec::new();
+        let watermark = self.mvcc().watermark();
+        let mut has_keep_first_key_under_watermark = false;
 
         while merge_iter.is_valid() {
             let same_to_last_key = merge_iter.key().key_ref() == last_key;
+
+            if !same_to_last_key {
+                has_keep_first_key_under_watermark = false;
+            }
+
+            // first_key_with_diff_ts 必须保留，除非是watermark内且为delete且compact_to_bottom_level
+            if compact_to_bottom_level
+                && !same_to_last_key
+                && merge_iter.key().ts() <= watermark
+                && merge_iter.value().is_empty()
+            {
+                last_key = merge_iter.key().key_ref().to_vec();
+                merge_iter.next()?;
+                has_keep_first_key_under_watermark = true;
+                continue;
+            }
+
+            // 是first_key_with_diff_ts  且本身ts <= watermark
+            if !same_to_last_key && merge_iter.key().ts() <= watermark {
+                has_keep_first_key_under_watermark = true;
+            }
+
+            // 不是 first_key_with_diff_ts
+            if same_to_last_key && merge_iter.key().ts() <= watermark {
+                if has_keep_first_key_under_watermark {
+                    merge_iter.next()?;
+                    continue;
+                }
+
+                has_keep_first_key_under_watermark = true;
+            }
 
             if builder.estimated_size() >= self.options.target_sst_size && !same_to_last_key {
                 let old_builder = builder;
