@@ -45,6 +45,7 @@ impl BlockMeta {
         block_meta: &[BlockMeta],
         #[allow(clippy::ptr_arg)] // remove this allow after you finish
         buf: &mut Vec<u8>,
+        max_ts: u64,
     ) {
         let begin = buf.len();
         buf.put_u32(block_meta.len() as u32);
@@ -63,13 +64,14 @@ impl BlockMeta {
             buf.put_u64(meta.last_key.ts());
         }
         buf.put_u32(crc32fast::hash(&buf[begin + 4..]));
+        buf.put_u64(max_ts);
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(mut buf: &[u8]) -> Vec<BlockMeta> {
+    pub fn decode_block_meta(mut buf: &[u8]) -> (Vec<BlockMeta>, u64) {
         let mut meta_blocks = Vec::new();
         let meta_num = buf.get_u32() as usize;
-        let crc32 = crc32fast::hash(&buf[..(buf.remaining() - 4)]);
+        let crc32 = crc32fast::hash(&buf[..(buf.remaining() - 4 - 8)]);
         for _ in 0..meta_num {
             let mut meta = BlockMeta::new_without_params();
 
@@ -94,7 +96,8 @@ impl BlockMeta {
             panic!("crc32 check error!");
         }
 
-        meta_blocks
+        let max_ts = buf.get_u64();
+        (meta_blocks, max_ts)
     }
 }
 
@@ -165,7 +168,7 @@ impl SsTable {
         let block_meta_offset = file.read(bloom_offset - 4, 4)?.as_slice().get_u32() as u64;
         let meta_blocks_data =
             file.read(block_meta_offset, bloom_offset - 4 - block_meta_offset)?;
-        let meta_blocks = BlockMeta::decode_block_meta(&(meta_blocks_data[..]));
+        let (meta_blocks, max_ts) = BlockMeta::decode_block_meta(&(meta_blocks_data[..]));
 
         let first_key = meta_blocks.first().unwrap().first_key.clone();
         let last_key = meta_blocks.last().unwrap().last_key.clone();
@@ -179,7 +182,7 @@ impl SsTable {
             first_key,
             last_key,
             bloom: Some(bloom),
-            max_ts: 0,
+            max_ts,
         })
     }
 

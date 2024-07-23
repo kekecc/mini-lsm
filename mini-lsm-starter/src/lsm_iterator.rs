@@ -26,14 +26,16 @@ pub struct LsmIterator {
     // false while key > upper
     is_valid: bool,
     prev_key: Vec<u8>,
+    read_ts: u64,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
+    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>, read_ts: u64) -> Result<Self> {
         let mut iter = iter;
         let mut prev_key = Vec::new();
 
         loop {
+            // 跳过过期的key
             while iter.is_valid() && iter.key().key_ref() == prev_key.as_slice() {
                 iter.next()?;
             }
@@ -42,7 +44,23 @@ impl LsmIterator {
                 break;
             }
 
+            // 记录新的key
             prev_key = iter.key().key_ref().to_vec();
+
+            // 确保新的key符合 key.ts() <= read_ts
+            while iter.is_valid() && iter.key().key_ref() == prev_key && iter.key().ts() > read_ts {
+                iter.next()?;
+            }
+
+            if !iter.is_valid() {
+                break;
+            }
+
+            // 当前的key中没有符合 ts <= read_ts的
+            if iter.key().key_ref() != prev_key {
+                continue;
+            }
+
             if !iter.value().is_empty() {
                 break;
             }
@@ -63,6 +81,7 @@ impl LsmIterator {
             upper,
             is_valid,
             prev_key,
+            read_ts,
         })
     }
 }
@@ -95,6 +114,22 @@ impl StorageIterator for LsmIterator {
             }
 
             self.prev_key = self.inner.key().key_ref().to_vec();
+
+            while self.inner.is_valid()
+                && self.inner.key().key_ref() == self.prev_key
+                && self.inner.key().ts() > self.read_ts
+            {
+                self.inner.next()?;
+            }
+
+            if !self.inner.is_valid() {
+                break;
+            }
+
+            if self.inner.key().key_ref() != self.prev_key {
+                continue;
+            }
+
             if !self.inner.value().is_empty() {
                 break;
             }

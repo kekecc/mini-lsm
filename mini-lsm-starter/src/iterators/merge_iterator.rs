@@ -54,6 +54,8 @@ impl<I: StorageIterator> MergeIterator<I> {
         }
 
         let mut binary_heap = BinaryHeap::new();
+
+        // to pass week1_day6 test3, consider to make current not None when all iters are invalid
         if iters.iter().all(|x| !x.is_valid()) {
             let mut iters = iters;
             return Self {
