@@ -1,4 +1,4 @@
-use std::{thread::sleep, time::Duration};
+use std::time::Duration;
 
 use bytes::BufMut;
 use tempfile::tempdir;

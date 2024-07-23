@@ -11,6 +11,8 @@ use bytes::{Buf, BufMut, Bytes};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 
+use crate::key::KeyBytes;
+
 pub struct Wal {
     file: Arc<Mutex<BufWriter<File>>>,
 }
@@ -28,7 +30,7 @@ impl Wal {
         })
     }
 
-    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<Bytes, Bytes>) -> Result<Self> {
+    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<KeyBytes, Bytes>) -> Result<Self> {
         let path = path.as_ref();
         let mut file = OpenOptions::new()
             .read(true)
@@ -43,11 +45,13 @@ impl Wal {
         while data.has_remaining() {
             let mut hasher = crc32fast::Hasher::new();
 
-            let key_len = data.get_u16();
-            hasher.write_u16(key_len);
-            let key = Bytes::copy_from_slice(&data[..key_len as usize]);
+            let raw_len = data.get_u16();
+            hasher.write_u16(raw_len);
+            let key = Bytes::copy_from_slice(&data[..(raw_len - 8) as usize]);
             hasher.write(&key);
-            data.advance(key_len as usize);
+            let ts = (&data[(raw_len - 8) as usize..raw_len as usize]).get_u64();
+            hasher.write_u64(ts);
+            data.advance(raw_len as usize);
 
             let value_len = data.get_u16();
             hasher.write_u16(value_len);
@@ -60,7 +64,7 @@ impl Wal {
                 panic!("check crc32 error!");
             }
 
-            skiplist.insert(key, value);
+            skiplist.insert(KeyBytes::from_bytes_with_ts(key, ts), value);
         }
 
         Ok(Self {
@@ -68,19 +72,25 @@ impl Wal {
         })
     }
 
-    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn put(&self, key: KeyBytes, value: &[u8]) -> Result<()> {
         let mut file = self.file.lock();
 
         let mut buf: Vec<u8> = Vec::with_capacity(
-            key.len() + value.len() + 2 * std::mem::size_of::<u16>() + std::mem::size_of::<u32>(),
+            key.raw_len()
+                + value.len()
+                + 2 * std::mem::size_of::<u16>()
+                + std::mem::size_of::<u32>(),
         );
 
         let mut hasher = crc32fast::Hasher::new();
 
-        buf.put_u16(key.len() as u16);
-        hasher.write_u16(key.len() as u16);
-        buf.put_slice(key);
-        hasher.write(key);
+        buf.put_u16(key.raw_len() as u16);
+        hasher.write_u16(key.raw_len() as u16);
+        buf.put_slice(key.key_ref());
+        hasher.write(key.key_ref());
+        buf.put_u64(key.ts());
+        hasher.write_u64(key.ts());
+
         buf.put_u16(value.len() as u16);
         hasher.write_u16(value.len() as u16);
         buf.put_slice(value);

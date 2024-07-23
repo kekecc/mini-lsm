@@ -54,18 +54,26 @@ impl<I: StorageIterator> MergeIterator<I> {
         }
 
         let mut binary_heap = BinaryHeap::new();
+        if iters.iter().all(|x| !x.is_valid()) {
+            let mut iters = iters;
+            return Self {
+                iters: binary_heap,
+                current: Some(HeapWrapper(0, iters.pop().unwrap())),
+            };
+        }
+
         for (index, iter) in iters.into_iter().enumerate() {
             if iter.is_valid() {
                 binary_heap.push(HeapWrapper(index, iter));
             }
         }
 
-        let current = binary_heap.pop();
+        let current = binary_heap.pop().unwrap();
 
         // 如果iters内所有的iter都是in_valid，那么MergeIterator将为空，MergeIterator.is_valid返回false
         MergeIterator {
             iters: binary_heap,
-            current: current,
+            current: Some(current),
         }
     }
 }

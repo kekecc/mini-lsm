@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use bytes::Buf;
 use tempfile::tempdir;
 
 use crate::{
@@ -65,6 +64,7 @@ fn test_task2_storage_integration() {
     assert_eq!(&storage.get(b"2").unwrap().unwrap()[..], b"2333");
     assert_eq!(&storage.get(b"3").unwrap().unwrap()[..], b"23333");
     storage.delete(b"2").unwrap();
+    println!("{:?}", storage.get(b"2").unwrap());
     assert!(storage.get(b"2").unwrap().is_none());
     storage.delete(b"0").unwrap(); // should NOT report any error
 }

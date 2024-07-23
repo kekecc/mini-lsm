@@ -116,13 +116,14 @@ pub enum CompactionOptions {
 }
 
 impl LsmStorageInner {
-    fn compact(&self, _task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
+    fn compact(&self, task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
         let snapshot = {
             let guard = self.state.read();
             guard.as_ref().clone()
         };
 
-        match _task {
+        let compact_to_bottom_level = task.compact_to_bottom_level();
+        match task {
             CompactionTask::Leveled(_) => unimplemented!(),
             CompactionTask::Tiered(_) => unimplemented!(),
             CompactionTask::Simple(task) => match task.upper_level {
@@ -140,7 +141,7 @@ impl LsmStorageInner {
                     let second_iter = SstConcatIterator::create_and_seek_to_first(second_tables)?;
 
                     let merge_iter = TwoMergeIterator::create(first_iter, second_iter)?;
-                    self.compact_inner(merge_iter, _task.compact_to_bottom_level())
+                    self.compact_inner(merge_iter, compact_to_bottom_level)
                 }
                 None => {
                     let mut l0_iters = Vec::with_capacity(task.upper_level_sst_ids.len());
@@ -160,7 +161,7 @@ impl LsmStorageInner {
 
                     let merge_iter = TwoMergeIterator::create(first_iter, second_iter)?;
 
-                    self.compact_inner(merge_iter, _task.compact_to_bottom_level())
+                    self.compact_inner(merge_iter, compact_to_bottom_level)
                 }
             },
             CompactionTask::ForceFullCompaction {
@@ -184,7 +185,7 @@ impl LsmStorageInner {
                     SstConcatIterator::create_and_seek_to_first(l1_tables)?,
                 )?;
 
-                self.compact_inner(merge_iter, _task.compact_to_bottom_level())
+                self.compact_inner(merge_iter, compact_to_bottom_level)
             }
         }
     }
@@ -192,22 +193,17 @@ impl LsmStorageInner {
     fn compact_inner(
         &self,
         mut merge_iter: impl for<'a> StorageIterator<KeyType<'a> = crate::key::Key<&'a [u8]>>,
-        compact_to_bottom_level: bool,
+        _compact_to_bottom_level: bool,
     ) -> Result<Vec<Arc<SsTable>>> {
         // 按照大小获取SsTables
         let mut builder = SsTableBuilder::new(self.options.block_size);
         let mut sstables = Vec::new();
+        let mut last_key: Vec<u8> = Vec::new();
 
         while merge_iter.is_valid() {
-            if compact_to_bottom_level {
-                if !merge_iter.value().is_empty() {
-                    builder.add(merge_iter.key(), merge_iter.value());
-                }
-            } else {
-                builder.add(merge_iter.key(), merge_iter.value());
-            }
+            let same_to_last_key = merge_iter.key().key_ref() == last_key;
 
-            if builder.estimated_size() >= self.options.target_sst_size {
+            if builder.estimated_size() >= self.options.target_sst_size && !same_to_last_key {
                 let old_builder = builder;
                 builder = SsTableBuilder::new(self.options.block_size);
 
@@ -220,6 +216,11 @@ impl LsmStorageInner {
 
                 sstables.push(Arc::new(sstable));
             }
+
+            builder.add(merge_iter.key(), merge_iter.value());
+            last_key.clear();
+            last_key.extend(merge_iter.key().key_ref());
+
             merge_iter.next()?;
         }
 
