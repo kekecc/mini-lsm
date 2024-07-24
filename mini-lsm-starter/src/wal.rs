@@ -11,7 +11,11 @@ use bytes::{Buf, BufMut, Bytes};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 
-use crate::key::KeyBytes;
+use crate::key::{KeyBytes, KeySlice};
+
+const SIZEOF_U16: usize = std::mem::size_of::<u16>();
+const SIZEOF_U32: usize = std::mem::size_of::<u32>();
+const SIZEOF_U64: usize = std::mem::size_of::<u64>();
 
 pub struct Wal {
     file: Arc<Mutex<BufWriter<File>>>,
@@ -43,28 +47,29 @@ impl Wal {
 
         let mut data = &buf[..];
         while data.has_remaining() {
-            let mut hasher = crc32fast::Hasher::new();
+            let body_len = data.get_u32() as usize;
 
-            let raw_len = data.get_u16();
-            hasher.write_u16(raw_len);
-            let key = Bytes::copy_from_slice(&data[..(raw_len - 8) as usize]);
-            hasher.write(&key);
-            let ts = (&data[(raw_len - 8) as usize..raw_len as usize]).get_u64();
-            hasher.write_u64(ts);
-            data.advance(raw_len as usize);
+            let mut batch_data = &data[..body_len];
+            data.advance(body_len);
 
-            let value_len = data.get_u16();
-            hasher.write_u16(value_len);
-            let value = Bytes::copy_from_slice(&data[..value_len as usize]);
-            hasher.write(&value);
-            data.advance(value_len as usize);
+            let crc32 = crc32fast::hash(batch_data);
+            while batch_data.has_remaining() {
+                let key_len = batch_data.get_u16() as usize;
+                let key = Bytes::copy_from_slice(&batch_data[..key_len]);
+                batch_data.advance(key_len);
+                let ts = batch_data.get_u64();
 
-            let check_sum = data.get_u32();
-            if check_sum != hasher.finalize() {
-                panic!("check crc32 error!");
+                let value_len = batch_data.get_u16() as usize;
+                let value = Bytes::copy_from_slice(&batch_data[..value_len]);
+                batch_data.advance(value_len);
+
+                skiplist.insert(KeyBytes::from_bytes_with_ts(key, ts), value);
             }
 
-            skiplist.insert(KeyBytes::from_bytes_with_ts(key, ts), value);
+            let check_sum = data.get_u32();
+            if check_sum != crc32 {
+                panic!("check crc32 error!");
+            }
         }
 
         Ok(Self {
@@ -72,41 +77,41 @@ impl Wal {
         })
     }
 
-    pub fn put(&self, key: KeyBytes, value: &[u8]) -> Result<()> {
-        let mut file = self.file.lock();
-
-        let mut buf: Vec<u8> = Vec::with_capacity(
-            key.raw_len()
-                + value.len()
-                + 2 * std::mem::size_of::<u16>()
-                + std::mem::size_of::<u32>(),
-        );
-
-        let mut hasher = crc32fast::Hasher::new();
-
-        buf.put_u16(key.raw_len() as u16);
-        hasher.write_u16(key.raw_len() as u16);
-        buf.put_slice(key.key_ref());
-        hasher.write(key.key_ref());
-        buf.put_u64(key.ts());
-        hasher.write_u64(key.ts());
-
-        buf.put_u16(value.len() as u16);
-        hasher.write_u16(value.len() as u16);
-        buf.put_slice(value);
-        hasher.write(value);
-
-        let check_sum = hasher.finalize();
-        buf.put_u32(check_sum);
-
-        file.write_all(&buf)?;
-
-        Ok(())
+    pub fn put(&self, key: KeySlice, value: &[u8]) -> Result<()> {
+        self.put_batch(&[(key, value)])
     }
 
     /// Implement this in week 3, day 5.
-    pub fn put_batch(&self, _data: &[(&[u8], &[u8])]) -> Result<()> {
-        unimplemented!()
+    pub fn put_batch(&self, data: &[(KeySlice, &[u8])]) -> Result<()> {
+        let mut file = self.file.lock();
+        let mut body_len = 0;
+
+        for (key, value) in data.iter() {
+            // key len and value len
+            body_len += SIZEOF_U16 * 2;
+            // ts
+            body_len += SIZEOF_U64;
+            // key and value
+            body_len += key.key_len();
+            body_len += value.len();
+        }
+
+        let mut buf = Vec::with_capacity(SIZEOF_U32 + body_len + SIZEOF_U32);
+
+        buf.put_u32(body_len as u32);
+        for (key, value) in data.iter() {
+            buf.put_u16(key.key_len() as u16);
+            buf.put_slice(&key.key_ref());
+            buf.put_u64(key.ts());
+            buf.put_u16(value.len() as u16);
+            buf.put_slice(&value);
+        }
+        let check_sum = crc32fast::hash(&buf[SIZEOF_U32..]);
+
+        buf.put_u32(check_sum);
+        file.write_all(&buf)?;
+
+        Ok(())
     }
 
     pub fn sync(&self) -> Result<()> {

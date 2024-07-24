@@ -4,7 +4,10 @@
 use std::{
     collections::HashSet,
     ops::Bound,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use anyhow::Result;
@@ -16,7 +19,7 @@ use parking_lot::Mutex;
 use crate::{
     iterators::{two_merge_iterator::TwoMergeIterator, StorageIterator},
     lsm_iterator::{FusedIterator, LsmIterator},
-    lsm_storage::LsmStorageInner,
+    lsm_storage::{LsmStorageInner, WriteBatchRecord},
     mem_table::map_bound,
 };
 
@@ -31,6 +34,10 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        if self.committed.load(Ordering::Relaxed) {
+            panic!("txn committed!");
+        }
+
         if let Some(res) = self.local_storage.get(&Bytes::copy_from_slice(key)) {
             if res.value().is_empty() {
                 return Ok(None);
@@ -43,29 +50,69 @@ impl Transaction {
     }
 
     pub fn scan(self: &Arc<Self>, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<TxnIterator> {
+        if self.committed.load(Ordering::Relaxed) {
+            panic!("txn committed!");
+        }
+
+        let mut local_iter = TxnLocalIterator::new(
+            self.local_storage.clone(),
+            |map| map.range((map_bound(lower), map_bound(upper))),
+            (Bytes::new(), Bytes::new()),
+        );
+
+        let entry = local_iter.with_iter_mut(|iter| {
+            iter.next()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .unwrap_or_else(|| (Bytes::new(), Bytes::new()))
+        });
+        local_iter.with_item_mut(|item| *item = entry);
+
         Ok(TxnIterator::create(
             self.clone(),
             TwoMergeIterator::create(
-                TxnLocalIterator::new(
-                    self.local_storage.clone(),
-                    |map| map.range((map_bound(lower), map_bound(upper))),
-                    (Bytes::new(), Bytes::new()),
-                ),
+                local_iter,
                 self.inner.scan_with_ts(self.read_ts, lower, upper)?,
             )?,
         )?)
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
-        unimplemented!()
+        if self.committed.load(Ordering::Relaxed) {
+            panic!("txn committed!");
+        }
+
+        self.local_storage
+            .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
     }
 
     pub fn delete(&self, key: &[u8]) {
-        unimplemented!()
+        if self.committed.load(Ordering::Relaxed) {
+            panic!("txn committed!");
+        }
+
+        self.local_storage
+            .insert(Bytes::copy_from_slice(key), Bytes::new());
     }
 
     pub fn commit(&self) -> Result<()> {
-        unimplemented!()
+        self.committed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .expect("txn commit error!");
+
+        let write_batch: Vec<WriteBatchRecord<Bytes>> = self
+            .local_storage
+            .iter()
+            .map(|kv| {
+                if kv.value().is_empty() {
+                    WriteBatchRecord::Del(kv.key().clone())
+                } else {
+                    WriteBatchRecord::Put(kv.key().clone(), kv.value().clone())
+                }
+            })
+            .collect();
+
+        self.inner.write_batch(&write_batch)?;
+        Ok(())
     }
 }
 
@@ -128,7 +175,17 @@ impl TxnIterator {
         txn: Arc<Transaction>,
         iter: TwoMergeIterator<TxnLocalIterator, FusedIterator<LsmIterator>>,
     ) -> Result<Self> {
-        Ok(Self { txn, iter })
+        let mut iter = Self { txn, iter };
+        iter.skip_deletions()?;
+        Ok(iter)
+    }
+
+    fn skip_deletions(&mut self) -> Result<()> {
+        while self.iter.is_valid() && self.iter.value().is_empty() {
+            self.iter.next()?;
+        }
+
+        Ok(())
     }
 }
 
@@ -148,7 +205,8 @@ impl StorageIterator for TxnIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        self.iter.next()
+        self.iter.next()?;
+        self.skip_deletions()
     }
 
     fn num_active_iterators(&self) -> usize {
