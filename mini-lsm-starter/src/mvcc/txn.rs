@@ -10,7 +10,7 @@ use std::{
     },
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
@@ -22,6 +22,8 @@ use crate::{
     lsm_storage::{LsmStorageInner, WriteBatchRecord},
     mem_table::map_bound,
 };
+
+use super::CommittedTxnData;
 
 pub struct Transaction {
     pub(crate) read_ts: u64,
@@ -36,6 +38,12 @@ impl Transaction {
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
         if self.committed.load(Ordering::Relaxed) {
             panic!("txn committed!");
+        }
+
+        if let Some(guard) = &self.key_hashes {
+            let mut guard = guard.lock();
+            let (_, read_set) = &mut *guard;
+            read_set.insert(farmhash::hash32(key));
         }
 
         if let Some(res) = self.local_storage.get(&Bytes::copy_from_slice(key)) {
@@ -81,6 +89,12 @@ impl Transaction {
             panic!("txn committed!");
         }
 
+        if let Some(guard) = &self.key_hashes {
+            let mut guard = guard.lock();
+            let (write_set, _) = &mut *guard;
+            write_set.insert(farmhash::hash32(key));
+        }
+
         self.local_storage
             .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
     }
@@ -88,6 +102,12 @@ impl Transaction {
     pub fn delete(&self, key: &[u8]) {
         if self.committed.load(Ordering::Relaxed) {
             panic!("txn committed!");
+        }
+
+        if let Some(guard) = &self.key_hashes {
+            let mut guard = guard.lock();
+            let (write_set, _) = &mut *guard;
+            write_set.insert(farmhash::hash32(key));
         }
 
         self.local_storage
@@ -98,6 +118,27 @@ impl Transaction {
         self.committed
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .expect("txn commit error!");
+
+        let _ = self.inner.mvcc().commit_lock.lock();
+
+        let mut has_check_serializability = false;
+        if let Some(guard) = &self.key_hashes {
+            let guard = guard.lock();
+            let (write_set, read_set) = &*guard;
+
+            if !write_set.is_empty() {
+                let txns = self.inner.mvcc().committed_txns.lock();
+                for (_, txn) in txns.range((self.read_ts + 1)..) {
+                    for hash in read_set {
+                        if txn.key_hashes.contains(hash) {
+                            bail!("serializability check error!");
+                        }
+                    }
+                }
+            }
+
+            has_check_serializability = true;
+        }
 
         let write_batch: Vec<WriteBatchRecord<Bytes>> = self
             .local_storage
@@ -110,8 +151,37 @@ impl Transaction {
                 }
             })
             .collect();
+        let ts = self.inner.write_batch_inner(&write_batch)?;
 
-        self.inner.write_batch(&write_batch)?;
+        if has_check_serializability {
+            let mut txns = self.inner.mvcc().committed_txns.lock();
+            let write_set = if let Some(guard) = &self.key_hashes {
+                let guard = guard.lock();
+                let write_set = guard.0.clone();
+                write_set
+            } else {
+                HashSet::new()
+            };
+
+            let _ = txns.insert(
+                ts,
+                CommittedTxnData {
+                    key_hashes: write_set,
+                    read_ts: self.read_ts,
+                    commit_ts: ts,
+                },
+            );
+
+            let watermark = self.inner.mvcc().watermark();
+            while let Some(entry) = txns.first_entry() {
+                if *entry.key() < watermark {
+                    entry.remove();
+                } else {
+                    break;
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -177,6 +247,10 @@ impl TxnIterator {
     ) -> Result<Self> {
         let mut iter = Self { txn, iter };
         iter.skip_deletions()?;
+
+        if iter.is_valid() {
+            iter.add_to_read_set()?;
+        }
         Ok(iter)
     }
 
@@ -185,6 +259,15 @@ impl TxnIterator {
             self.iter.next()?;
         }
 
+        Ok(())
+    }
+
+    fn add_to_read_set(&self) -> Result<()> {
+        if let Some(guard) = &self.txn.key_hashes {
+            let mut guard = guard.lock();
+            let (_, read_set) = &mut *guard;
+            read_set.insert(farmhash::hash32(self.iter.key()));
+        }
         Ok(())
     }
 }
@@ -206,7 +289,13 @@ impl StorageIterator for TxnIterator {
 
     fn next(&mut self) -> Result<()> {
         self.iter.next()?;
-        self.skip_deletions()
+        self.skip_deletions()?;
+
+        if self.iter.is_valid() {
+            self.add_to_read_set()?;
+        }
+
+        Ok(())
     }
 
     fn num_active_iterators(&self) -> usize {
